@@ -1,0 +1,207 @@
+#include <ArduinoJson.h>
+#include<ESP8266WiFi.h>
+#include<WiFiClient.h>
+#include<WiFiServer.h>
+#include<DHT.h>
+#include<ThingSpeak.h>
+#include <TM1637Display.h>
+#include<ESP8266HTTPClient.h>
+
+
+const char *ssid = "i-ball baton";
+const char *password = "19661966";
+
+DHT dht(D1, DHT11);
+#define CLK D2
+#define DIO D3
+#define vib_pin D6
+TM1637Display display(CLK, DIO);
+WiFiClient client;
+WiFiServer server(80);
+
+String host = "api.thingspeak.com";
+int httpport_no = 80;
+long channel_num = 1680458;
+String writeapikey = "Q3SB26N5KFBYJYPI";
+String readapikey = "77SPPFRBUTBNQ9UV";
+String sensing_url = "/update?api_key=Q3SB26N5KFBYJYPI&field1=";
+String temp_url = "/update?api_key=Q3SB26N5KFBYJYPI&field2=";
+String read_url = "/channels/1680875/fields/1.json?api_key=77SPPFRBUTBNQ9UV&results=2";
+HTTPClient http; 
+
+void setup() {
+ //put your setup code here, to run once:
+  Serial.begin(9600);
+WiFi.begin(ssid, password);
+  while(WiFi.status() != WL_CONNECTED){
+  Serial.println("..");
+  delay(200);
+}
+Serial.println("wifi connected");
+Serial.println(WiFi.localIP());
+
+server.begin();
+uint8_t show[] = {0xff, 0xff, 0xff, 0xff};
+uint8_t hide[] = {0x00, 0x00, 0x00, 0x00};
+
+
+pinMode(vib_pin, INPUT);
+display.setSegments(show); // turn on display
+display.clear();
+display.setBrightness(7);
+dht.begin();
+makeHTTPRequest();
+}
+
+void makeHTTPRequest() {
+
+  // Opening connection to server (Use 80 as port if HTTP)
+  if (!client.connect(host, 80))
+  {
+    Serial.println(F("Connection failed"));
+    return;
+  }
+
+  // give the esp a breather
+  yield();
+
+  // Send HTTP request
+  client.print(F("GET "));
+  // This is the second half of a request (everything that comes after the base URL)
+  client.print("/channels/1680875/fields/1.json?api_key=XTRAMRTS3JSH60Z5&results=2"); // %2C == ,
+  client.println(F(" HTTP/1.1"));
+
+  //Headers
+  client.print(F("Host: "));
+  client.println(host);
+
+  client.println(F("Cache-Control: no-cache"));
+
+  if (client.println() == 0)
+  {
+    Serial.println(F("Failed to send request"));
+    return;
+  }
+  //delay(100);
+  // Check HTTP status
+  char status[32] = {0};
+  client.readBytesUntil('\r', status, sizeof(status));
+  if (strcmp(status, "HTTP/1.1 200 OK") != 0)
+  {
+    Serial.print(F("Unexpected response: "));
+    Serial.println(status);
+    return;
+  }
+
+  // Skip HTTP headers
+  char endOfHeaders[] = "\r\n\r\n";
+  if (!client.find(endOfHeaders))
+  {
+    Serial.println(F("Invalid response"));
+    return;
+  }
+
+  // This is probably not needed for most, but I had issues
+  // with the Tindie api where sometimes there were random
+  // characters coming back before the body of the response.
+  // This will cause no hard to leave it in
+  // peek() will look at the character, but not take it off the queue
+  while (client.available() && client.peek() != '{')
+  {
+    char c = 0;
+    client.readBytes(&c, 1);
+    Serial.print(c);
+    Serial.println("BAD");
+  }
+
+  //  // While the client is still availble read each
+  //  // byte and print to the serial monitor
+  //  while (client.available()) {
+  //    char c = 0;
+  //    client.readBytes(&c, 1);
+  //    Serial.print(c);
+  //  }
+
+
+
+  DynamicJsonDocument doc(2048); //For ESP32/ESP8266 you'll mainly use dynamic.
+// demo purpose json code
+
+DeserializationError error = deserializeJson(doc, client);
+
+if (error) {
+  Serial.print(F("deserializeJson() failed: "));
+  Serial.println(error.f_str());
+  return;
+}
+
+JsonObject channel = doc["channel"];
+long channel_id = channel["id"]; // 1680875
+const char* channel_name = channel["name"]; // "display"
+const char* channel_description = channel["description"]; // "temperature display"
+const char* channel_latitude = channel["latitude"]; // "0.0"
+const char* channel_longitude = channel["longitude"]; // "0.0"
+const char* channel_field1 = channel["field1"]; // "Temperature"
+const char* channel_created_at = channel["created_at"]; // "2022-03-21T06:51:04Z"
+const char* channel_updated_at = channel["updated_at"]; // "2022-03-21T06:51:04Z"
+int channel_last_entry_id = channel["last_entry_id"]; // 6
+
+for (JsonObject feed : doc["feeds"].as<JsonArray>()) {
+
+  const char* feed_created_at = feed["created_at"]; // "2022-03-21T07:25:41Z", "2022-03-21T07:25:56Z"
+  int feed_entry_id = feed["entry_id"]; // 5, 6
+  const char* feed_field1 = feed["field1"];
+   Serial.println(feed_field1);
+
+
+}
+
+
+
+
+}
+
+void loop() {
+  // put your main code here, to run repeatedly:
+  const uint8_t cel[] = {
+  SEG_A | SEG_B | SEG_F | SEG_G,  //round
+  SEG_A | SEG_D | SEG_E | SEG_F   // c
+};
+  float temperature  = dht.readTemperature();  
+  Serial.println("Temperature : " + String(temperature));
+   delay(200);
+  
+  int temp_val = (temperature < 0 ? (temperature - 0.5) : (temperature + 0.5));
+  Serial.println(temp_val);
+  int vib = digitalRead(vib_pin);
+  
+    sensing_url = sensing_url + (String) vib + ",";
+    http.begin(client, host, httpport_no, sensing_url);
+    int httpcode = http.GET();
+    Serial.println(httpcode);
+    delay(1000);
+    
+  temp_url = temp_url + (String) temperature + ",";
+  http.begin(client, host, httpport_no, temp_url);
+  httpcode = http.GET();
+  Serial.println(httpcode);
+  delay(1000);
+  
+
+
+  
+  if(vib == HIGH){
+    Serial.println(vib);
+    display.clear();
+      display.showNumberDec(temp_val, false, 2, 0);
+      display.setSegments(cel, 2, 2);
+  delay(1000);
+  }
+  else{
+    display.clear();
+    display.showNumberDec(0, false);
+    }
+
+    
+
+  }
